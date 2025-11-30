@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>YouTube AI 분석기 — JM Edition</title>
+
+    <!-- TailwindCSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #f8fafc;
+        }
+
+        .fade-in {
+            animation: fadeIn .4s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .modal-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body class="text-gray-800">
+
+    <div class="max-w-6xl mx-auto px-4 py-8">
+
+        <header class="mb-10 text-center fade-in">
+            <h1 class="text-4xl font-bold text-gray-900 mb-2">✨ YouTube AI 분석기</h1>
+            <p class="text-gray-600 text-lg">프록시 기반 · API 보안완전 · Notion/GitHub 완전호환</p>
+        </header>
+
+        <!-- 검색 영역 -->
+        <div class="bg-white shadow-lg rounded-2xl p-6 mb-8 fade-in">
+            <div class="flex flex-col md:flex-row gap-4">
+                <input id="searchInput" type="text"
+                    placeholder="검색어 입력 (예: 재테크, 요리, 시니어, 음악...)"
+                    class="flex-1 px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    onkeypress="if(event.key==='Enter') startSearch()">
+
+                <button onclick="startSearch()"
+                    class="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl flex items-center justify-center gap-2 transition">
+                    <span>검색</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 결과 카드 영역 -->
+        <div id="resultsArea" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 fade-in"></div>
+
+        <!-- 메인 로딩 아이콘 -->
+        <div id="mainLoader" class="hidden flex justify-center items-center py-12">
+            <div class="loader border-4 border-indigo-500 border-t-transparent rounded-full w-10 h-10 animate-spin"></div>
+        </div>
+    </div>
+
+    <!-- AI 분석 모달 -->
+    <div id="analysisModal"
+        class="hidden modal-overlay bg-black/40 flex items-center justify-center z-50 p-4">
+
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden flex flex-col fade-in">
+            <div class="p-5 border-b bg-gray-50 flex justify-between items-center">
+                <h3 class="text-lg font-semibold">✨ AI 분석 결과</h3>
+                <button onclick="closeModal()" class="text-gray-500 hover:text-gray-700">✖</button>
+            </div>
+
+            <div id="modalContent" class="p-6 overflow-y-auto flex-1 prose max-w-none"></div>
+
+            <div class="p-4 border-t bg-gray-50 text-right">
+                <button onclick="closeModal()" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-xl">
+                    닫기
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+
+        /* 1) 프록시 URL — JM님 전용 */
+        const PROXY_URL = "https://script.google.com/macros/s/AKfycbwiNLhweA9H1w-LAKiwWkt3ZlGpEf_Q1L_UBILeTStnpoXvAkFFVR0Si2rtSSW1QSRv/exec";
+
+
+        /* 2) 유튜브 검색 */
+        async function startSearch() {
+            const query = document.getElementById('searchInput').value.trim();
+            if (!query) return alert("검색어를 입력하세요.");
+
+            const results = document.getElementById('resultsArea');
+            const loader = document.getElementById('mainLoader');
+
+            results.innerHTML = "";
+            loader.classList.remove('hidden');
+
+            try {
+                const searchRes = await proxy({ type: "youtube_search", query });
+                const items = searchRes.items || [];
+
+                if (items.length === 0) {
+                    results.innerHTML = `<p class="text-center text-gray-500 col-span-full">검색 결과가 없습니다.</p>`;
+                    return;
+                }
+
+                const videoIds = items.map(v => v.id.videoId).join(',');
+                const stats = await proxy({ type: "youtube_video_stats", videoIds });
+
+                const channelIds = stats.items.map(v => v.snippet.channelId).join(',');
+                const channels = await proxy({ type: "youtube_channel_stats", channelIds });
+
+                renderCards(items, stats.items, channels.items);
+
+            } catch (e) {
+                alert("오류 발생: " + e);
+            } finally {
+                loader.classList.add('hidden');
+            }
+        }
+
+
+        /* 3) 프록시 호출 */
+        async function proxy(payload) {
+            const res = await fetch(PROXY_URL, {
+                method: "POST",
+                body: JSON.stringify(payload)
+            });
+            return await res.json();
+        }
+
+
+        /* 4) 카드 렌더링 */
+        function renderCards(searchItems, statItems, channelItems) {
+            const CH = {};
+            channelItems.forEach(c => CH[c.id] = c.statistics.subscriberCount);
+
+            const area = document.getElementById('resultsArea');
+            area.innerHTML = "";
+
+            statItems.forEach((v, idx) => {
+                const s = searchItems[idx];
+                const sub = parseInt(CH[v.snippet.channelId] || 0);
+                const view = parseInt(v.statistics.viewCount || 0);
+                const perf = sub > 0 ? ((view / sub) * 100).toFixed(1) : 0;
+
+                const card = `
+                <div class="bg-white rounded-2xl shadow hover:shadow-xl transition overflow-hidden flex flex-col fade-in">
+                    <img src="${s.snippet.thumbnails.medium.url}" class="w-full h-48 object-cover">
+
+                    <div class="p-5 flex-1 flex flex-col">
+                        <h3 class="font-semibold text-gray-900 line-clamp-2 mb-2">${s.snippet.title}</h3>
+                        <p class="text-sm text-gray-500 mb-3">${s.snippet.channelTitle}</p>
+
+                        <div class="grid grid-cols-3 text-center text-xs bg-gray-50 rounded-xl p-2 mb-4">
+                            <div><p class="text-gray-400">조회수</p><p>${formatK(view)}</p></div>
+                            <div><p class="text-gray-400">구독자</p><p>${formatK(sub)}</p></div>
+                            <div><p class="text-gray-400">성과</p><p class="font-bold text-indigo-600">${perf}%</p></div>
+                        </div>
+
+                        <button onclick="analyzeVideo('${v.id}', '${s.snippet.title.replace(/'/g, "\\'")}')"
+                            class="mt-auto bg-indigo-50 text-indigo-600 hover:bg-indigo-100 py-2 rounded-xl font-semibold">
+                            ✨ AI 분석
+                        </button>
+                    </div>
+                </div>
+                `;
+
+                area.innerHTML += card;
+            });
+        }
+
+        function formatK(n) {
+            if (n > 999999) return (n / 1000000).toFixed(1) + "M";
+            if (n > 999) return (n / 1000).toFixed(1) + "K";
+            return n;
+        }
+
+
+        /* 5) AI 분석 */
+        async function analyzeVideo(videoId, title) {
+
+            const modal = document.getElementById('analysisModal');
+            const box = document.getElementById('modalContent');
+
+            modal.classList.remove('hidden');
+            box.innerHTML = `
+                <div class="text-center py-20">
+                    <div class="loader border-4 border-indigo-500 border-t-transparent rounded-full w-10 h-10 mx-auto animate-spin"></div>
+                    <p class="mt-4 text-gray-600 font-medium">AI 분석 중...</p>
+                </div>
+            `;
+
+            try {
+                const comments = await proxy({ type: "youtube_comments", videoId });
+                const list = comments.items?.map(c =>
+                    c.snippet.topLevelComment.snippet.textDisplay
+                ) || [];
+
+                const prompt = `
+아래는 유튜브 영상의 주요 댓글입니다.
+이 댓글들을 기반으로 다음을 분석하세요:
+
+1) 시청자들이 좋아한 요소  
+2) 부족하거나 개선되길 원하는 요소  
+3) JM의 새로운 콘텐츠 아이디어 3가지  
+4) 각 아이디어의 썸네일 문구, 제목 예시  
+
+영상 제목: "${title}"
+
+댓글 목록:
+${JSON.stringify(list, null, 2)}
+`;
+
+                const result = await proxy({
+                    type: "gemini_analyze",
+                    prompt: prompt
+                });
+
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "결과 없음";
+                box.innerHTML = markdownToHtml(text);
+
+            } catch (e) {
+                box.innerHTML = `<p class="text-red-500">오류 발생: ${e}</p>`;
+            }
+        }
+
+
+        /* 6) 모달 닫기 */
+        function closeModal() {
+            document.getElementById('analysisModal').classList.add('hidden');
+        }
+
+
+        /* 7) 간단한 Markdown 변환기 */
+        function markdownToHtml(md) {
+            return md
+                .replace(/^### (.*$)/gim, '<h3 class="text-lg font-bold">$1</h3>')
+                .replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold">$1</h2>')
+                .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold">$1</h1>')
+                .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
+                .replace(/\n/gim, "<br>");
+        }
+
+    </script>
+
+</body>
+
+</html>
